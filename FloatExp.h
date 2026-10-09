@@ -54,8 +54,12 @@ struct FExpDouble {
 #ifdef mpf_get_2exp_d
 		Exponent = mpf_get_2exp_d(&Mantissa, n.get_mpf_t());
 #else
-		Exponent = 0;
-		Mantissa = mpf_get_d_2exp((signed long *)&Exponent, n.get_mpf_t());
+		// mpf_get_d_2exp() only writes a 32 bit exponent, so it must never be
+		// given the address of the 64 bit Exponent member: negative exponents
+		// would lose their sign extension and become huge positive ones.
+		signed long RawExponent = 0;
+		Mantissa = mpf_get_d_2exp(&RawExponent, n.get_mpf_t());
+		Exponent = RawExponent;
 #endif
 		Normalize();
 	}
