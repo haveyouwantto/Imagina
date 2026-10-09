@@ -12,6 +12,7 @@
 #define IDD_TRANSFORMATION              113
 #define IDD_REFERENCE_SAVING            117
 #define IDD_ZOOM_EXPORT                 119
+#define IDD_ABOUT                       121
 #define IDC_EDIT1                       1000
 #define IDC_EDIT2                       1001
 #define IDC_IMAGINARY                   1001
@@ -50,14 +51,19 @@
 #define IDC_EXPORT_PROGRESS             1030
 #define IDC_EXPORT_STATUS               1031
 #define IDC_EXPORT_START                1032
+#define IDC_ABOUT_TEXT                  1034
+#define IDC_LICENSE_TEXT                1035
+
+// The licence text which ships inside the program.
+#define IDR_LICENSE                     200
 
 // Next default values for new objects
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        121
+#define _APS_NEXT_RESOURCE_VALUE        201
 #define _APS_NEXT_COMMAND_VALUE         40001
-#define _APS_NEXT_CONTROL_VALUE         1033
+#define _APS_NEXT_CONTROL_VALUE         1036
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

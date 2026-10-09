@@ -31,6 +31,7 @@ HMENU Image;
 HMENU FractalType;
 HMENU AlgorithmMenu;
 HMENU Recompute;
+HMENU HelpMenu;
 
 HWND TasksDialog = nullptr;
 
@@ -88,11 +89,15 @@ void CreateMainWindow() {
 	FractalType = CreateMenu();
 	AlgorithmMenu = CreateMenu();
 	Recompute = CreateMenu();
+	HelpMenu = CreateMenu();
 
 	AppendMenuW(MainMenu, MF_POPUP, (UINT_PTR)File, L"File");
 	AppendMenuW(MainMenu, MF_POPUP, (UINT_PTR)Fractal, L"Fractal");
 	AppendMenuW(MainMenu, MF_POPUP, (UINT_PTR)Computation, L"Computation");
 	AppendMenuW(MainMenu, MF_POPUP, (UINT_PTR)Image, L"Image");
+	AppendMenuW(MainMenu, MF_POPUP, (UINT_PTR)HelpMenu, L"Help");
+
+	AppendMenuW(HelpMenu, MF_STRING, (UINT_PTR)MenuID::AboutLicense, L"About / License...");
 
 	AppendMenuW(File, MF_STRING, (UINT_PTR)MenuID::Open, L"Open\tCtrl+O");
 	AppendMenuW(File, MF_STRING, (UINT_PTR)MenuID::Save, L"Save\tCtrl+S");
@@ -352,6 +357,63 @@ void SaveImage(bool raw = false) {
 	} else {
 		SaveImage(FileName);
 	}
+}
+
+// The program is distributed under the GNU Affero General Public License, which
+// asks for a notice that it is licensed under it, for a notice that this is a
+// modified version (with a date), and for the source of this version, so the
+// dialog shows all of that together with the licence text, which ships inside
+// the executable as a resource.
+static const wchar_t AboutNotice[] =
+	L"Imagina - fast fractal renderer & explorer\r\n"
+	L"Copyright (C) 2023 Zhuoran and contributors (see the source repository).\r\n"
+	L"\r\n"
+	L"This program is free software: you can redistribute it and/or modify it under the\r\n"
+	L"terms of the GNU Affero General Public License as published by the Free Software\r\n"
+	L"Foundation, either version 3 of the License, or (at your option) any later version.\r\n"
+	L"It is distributed in the hope that it will be useful, but without any warranty;\r\n"
+	L"without even the implied warranty of merchantability or fitness for a particular\r\n"
+	L"purpose.  The full licence text is shown below.\r\n"
+	L"\r\n"
+	L"Modified version (2026): zoom sequence export with lossless raw map files\r\n"
+	L"(*.rawz), the raw map codec and the command line and Python tools were added.\r\n"
+	L"\r\n"
+	L"Source of the original program:  https://github.com/5E-324/Imagina\r\n"
+	L"Source of this version:          https://github.com/haveyouwantto/Imagina\r\n";
+
+INT_PTR AboutProc(HWND hWndDlg, UINT message, WPARAM wParam, LPARAM /*lParam*/) {
+	switch (message) {
+		case WM_INITDIALOG: {
+			SetDlgItemTextW(hWndDlg, IDC_ABOUT_TEXT, AboutNotice);
+
+			HRSRC Resource = FindResourceW(nullptr, MAKEINTRESOURCEW(IDR_LICENSE), RT_RCDATA);
+			if (Resource) {
+				HGLOBAL Loaded = LoadResource(nullptr, Resource);
+				const char *Text = Loaded ? static_cast<const char *>(LockResource(Loaded)) : nullptr;
+				DWORD Size = SizeofResource(nullptr, Resource);
+				if (Text && Size) {
+					// SetDlgItemTextA wants a terminated string, the resource is
+					// the file as it is.
+					std::string Licence(Text, Size);
+					SendMessage(GetDlgItem(hWndDlg, IDC_LICENSE_TEXT), EM_SETLIMITTEXT, (WPARAM)0, (LPARAM)0);
+					SetDlgItemTextA(hWndDlg, IDC_LICENSE_TEXT, Licence.c_str());
+				}
+			}
+			return TRUE;
+		}
+		case WM_COMMAND: {
+			if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
+				EndDialog(hWndDlg, wParam);
+				return TRUE;
+			}
+			break;
+		}
+		case WM_CLOSE: {
+			EndDialog(hWndDlg, IDCANCEL);
+			return TRUE;
+		}
+	}
+	return FALSE;
 }
 
 INT_PTR ReferenceSavingProc(HWND hWndDlg, UINT message, WPARAM wParam, LPARAM /*lParam*/) {
@@ -1241,6 +1303,10 @@ LRESULT CALLBACK WindowProcess(HWND hWnd, UINT Message, WPARAM wParam, LPARAM lP
 				}
 				case (UINT_PTR)MenuID::ExportZoomSequence: {
 					ShowZoomExportDialog();
+					break;
+				}
+				case (UINT_PTR)MenuID::AboutLicense: {
+					DialogBox(nullptr, MAKEINTRESOURCE(IDD_ABOUT), HWnd, AboutProc);
 					break;
 				}
 				case (UINT_PTR)MenuID::ReferenceSaving: {

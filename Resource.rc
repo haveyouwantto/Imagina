@@ -154,6 +154,20 @@ BEGIN
     PUSHBUTTON      "Close",IDCANCEL,260,182,50,14
 END
 
+IDD_ABOUT DIALOGEX 0, 0, 400, 250
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "About Imagina"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "",IDC_ABOUT_TEXT,10,10,380,120
+    EDITTEXT        IDC_LICENSE_TEXT,10,136,380,96,ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP
+    DEFPUSHBUTTON   "Close",IDOK,340,232,50,14
+END
+
+// The licence which the program is distributed under, also shown in the
+// "About / Licence" dialog.
+IDR_LICENSE             RCDATA                  "LICENSE.txt"
+
 
 /////////////////////////////////////////////////////////////////////////////
 //
