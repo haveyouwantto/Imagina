@@ -9,6 +9,7 @@
 #include "gmp-impl.h"
 
 #include "File.h"
+#include "ZoomExport.h"
 
 size_t InitialWindowWidth = 2048;
 size_t InitialWindowHeight = 1024;
@@ -97,6 +98,7 @@ void CreateMainWindow() {
 	AppendMenuW(File, MF_STRING, (UINT_PTR)MenuID::Save, L"Save\tCtrl+S");
 	AppendMenuW(File, MF_STRING, (UINT_PTR)MenuID::SaveImage, L"Save image\tCtrl+Shift+S");
 	AppendMenuW(File, MF_STRING, (UINT_PTR)MenuID::SaveRawPixelData, L"Save raw pixel data");
+	AppendMenuW(File, MF_STRING, (UINT_PTR)MenuID::ExportZoomSequence, L"Export zoom sequence...");
 	AppendMenuW(File, MF_SEPARATOR, 0, nullptr);
 	AppendMenuW(File, MF_STRING, (UINT_PTR)MenuID::ReferenceSaving, L"Reference saving settings");
 
@@ -424,13 +426,6 @@ INT_PTR SetFormulaProc(HWND hWndDlg, UINT message, WPARAM wParam, LPARAM /*lPara
 
 	return 0;
 }
-
-enum class ZoomType {
-	Height = 0,
-	HalfHeight = 1,
-	Magnification = 2,
-	Depth = 3,
-};
 
 std::string ZoomToString(ZoomType type, HRReal halfH, HRReal OriginalHalfH) {
 	char Buffer[32];
@@ -1242,6 +1237,10 @@ LRESULT CALLBACK WindowProcess(HWND hWnd, UINT Message, WPARAM wParam, LPARAM lP
 				}
 				case (UINT_PTR)MenuID::SaveRawPixelData: {
 					SaveImage(true);
+					break;
+				}
+				case (UINT_PTR)MenuID::ExportZoomSequence: {
+					ShowZoomExportDialog();
 					break;
 				}
 				case (UINT_PTR)MenuID::ReferenceSaving: {

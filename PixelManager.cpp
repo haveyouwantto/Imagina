@@ -161,6 +161,29 @@ void StandardPixelManager::Init() {
 	Origin.Y = CurrentLocation.Y + OriginOffsetY;
 	Origin.X = CurrentLocation.X + OriginOffsetX;
 
+	InitLayoutAndData();
+}
+
+// Puts the passes back into the state a freshly initialised pixel manager has:
+// the same pass types and coordinate offsets a new location is rendered with
+// (see the layout in InitLayoutAndData()).
+void StandardPixelManager::ResetPassLayout() {
+	for (size_t i = PassCount; i > 1;) {
+		i--;
+		Passes[i].Type = PassType::XDoublingPos;
+		Passes[i].CoordOffsetX = 0;
+		Passes[i].CoordOffsetY = 0;
+		i--;
+		Passes[i].Type = PassType::YDoublingPos;
+		Passes[i].CoordOffsetX = 0;
+		Passes[i].CoordOffsetY = 0;
+	}
+	Passes[0].Type = PassType::Full;
+	Passes[0].CoordOffsetX = 0;
+	Passes[0].CoordOffsetY = 0;
+}
+
+void StandardPixelManager::InitLayoutAndData() {
 	uint32_t PassWidth = RoundUpToMultipleOfFour(Width); // TODO: Round according to pixel group size
 	uint32_t PassHeight = RoundUpToEven(Height);
 	int32_t PixelSizeExpX = 0, PixelSizeExpY = 0;
@@ -616,10 +639,20 @@ void StandardPixelManager::ShiftUpImageStack(int32_t DiffX, int32_t DiffY) {
 void StandardPixelManager::SetLocation(RelLocation &Location) {
 	if (CurrentLocation.HalfH != Location.HalfH) {
 		NumPrevTDs = 0;
-		size_t NumObtained;
-		GetTextures(PrevTDs, 16, NumObtained);
-		NumPrevTDs = NumObtained;
-		std::swap(TextureID, PrevTextureID);
+		if (Global::SuppressTextureUpdate) {
+			// The previous textures are only kept for rendering; during a zoom
+			// sequence export there is no rendering and the computation must not
+			// depend on the display in any way.
+			if (TextureID) glDeleteTextures(1, &TextureID);
+			if (PrevTextureID) glDeleteTextures(1, &PrevTextureID);
+			TextureID = 0;
+			PrevTextureID = 0;
+		} else {
+			size_t NumObtained;
+			GetTextures(PrevTDs, 16, NumObtained);
+			NumPrevTDs = NumObtained;
+			std::swap(TextureID, PrevTextureID);
+		}
 	} else {
 		NumPrevTDs = 0;
 	}
@@ -645,7 +678,7 @@ void StandardPixelManager::SetLocation(RelLocation &Location) {
 			NewOrigin.X = Origin.X - DiffX * PixelSize;
 			NewOrigin.Y = Origin.Y - DiffY * PixelSize;
 			PixelReused = true;
-			OverwriteReused = Global::HighQuality;
+			OverwriteReused = Global::HighQuality || Global::DisablePixelReuse;
 		} else {
 			goto ReuseFailed;
 		}
@@ -658,7 +691,7 @@ void StandardPixelManager::SetLocation(RelLocation &Location) {
 				//ReusedPass = PassCount - 1;
 				ReusedPass = std::min(std::max(CurrentPass, ReusedPass), PassCount - 1);
 				PixelReused = true;
-				OverwriteReused = false;
+				OverwriteReused = Global::DisablePixelReuse;
 			}
 			NewOrigin.X = Origin.X - DiffX * PixelSize;
 			NewOrigin.Y = Origin.Y - DiffY * PixelSize;
@@ -677,7 +710,7 @@ void StandardPixelManager::SetLocation(RelLocation &Location) {
 			NewOrigin.X = Origin.X - DiffX * NewPixelSize;
 			NewOrigin.Y = Origin.Y - DiffY * NewPixelSize;
 			PixelReused = true;
-			OverwriteReused = Global::HighQuality;
+			OverwriteReused = Global::HighQuality || Global::DisablePixelReuse;
 		} else {
 			goto ReuseFailed;
 		}

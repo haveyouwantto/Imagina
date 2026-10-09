@@ -11,6 +11,7 @@
 #define IDD_FEATURE_FINDER              111
 #define IDD_TRANSFORMATION              113
 #define IDD_REFERENCE_SAVING            117
+#define IDD_ZOOM_EXPORT                 119
 #define IDC_EDIT1                       1000
 #define IDC_EDIT2                       1001
 #define IDC_IMAGINARY                   1001
@@ -38,14 +39,25 @@
 #define IDC_INCLUDE_REFERENCE           1018
 #define IDC_STRETCH_RATIO               1020
 #define IDC_QUALITY_SLIDER              1021
+#define IDC_EXPORT_FILE                 1022
+#define IDC_EXPORT_BROWSE               1023
+#define IDC_EXPORT_WIDTH                1024
+#define IDC_EXPORT_HEIGHT               1025
+#define IDC_EXPORT_STEP                 1026
+#define IDC_EXPORT_TARGET_TYPE          1027
+#define IDC_EXPORT_TARGET_VALUE         1028
+#define IDC_EXPORT_INFO                 1029
+#define IDC_EXPORT_PROGRESS             1030
+#define IDC_EXPORT_STATUS               1031
+#define IDC_EXPORT_START                1032
 
 // Next default values for new objects
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        119
+#define _APS_NEXT_RESOURCE_VALUE        121
 #define _APS_NEXT_COMMAND_VALUE         40001
-#define _APS_NEXT_CONTROL_VALUE         1022
+#define _APS_NEXT_CONTROL_VALUE         1033
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

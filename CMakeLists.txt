@@ -4,6 +4,7 @@ project ("Imagina")
 
 option(ENABLE_CUSTOM_FORMULA "Enable custom formula" OFF)
 option(MPIR_USE_DLL "Use dll version of MPIR" ON)
+option(BUILD_CODEC_TEST "Build the raw map codec round trip test" OFF)
 set(INCLUDE_PATH "include" CACHE STRING "Include path")
 set(LIBRARY_PATH "lib" CACHE STRING "Library path")
 
@@ -62,3 +63,11 @@ set_source_files_properties(HInfLAEvaluator.cpp PROPERTIES COMPILE_FLAGS "-fasso
 
 set(CMAKE_CXX_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE} -Xlinker /MANIFEST:NO")
 set(CMAKE_CXX_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE} -Xlinker /ignore:4099")
+
+if(BUILD_CODEC_TEST)
+	add_executable (RawMapCodecTest "tests/RawMapCodecTest.cpp" "RawMapCodec.cpp")
+	set_property(TARGET RawMapCodecTest PROPERTY CXX_STANDARD 20)
+	target_include_directories(RawMapCodecTest PRIVATE SYSTEM ${INCLUDE_PATH} "${INCLUDE_PATH}/Release")
+	target_link_directories(RawMapCodecTest PRIVATE ${LIBRARY_PATH} "${LIBRARY_PATH}/Release")
+	target_link_libraries(RawMapCodecTest "zlibwapi")
+endif()

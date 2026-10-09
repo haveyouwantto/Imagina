@@ -45,4 +45,13 @@ namespace Global {
 
 	extern bool SaveReference;
 	extern int ReferenceQuality;
+
+	// Set while a zoom sequence is exported: rendering is suspended then, so the
+	// pixel manager must not touch textures or depend on the display at all.
+	extern bool SuppressTextureUpdate;
+
+	// Set while a zoom sequence is exported: every pixel is computed instead of
+	// being reused from a coarser pass, so that a key frame only depends on its
+	// own location and not on the frames which were exported before it.
+	extern bool DisablePixelReuse;
 }

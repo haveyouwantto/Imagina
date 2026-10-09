@@ -555,3 +555,25 @@ void SaveRawPixelData(wchar_t *FileName) {
 	File.close();
 #endif
 }
+
+bool GetRawPixelData(std::vector<float> &Pixels, int32_t &Width, int32_t &Height) {
+#ifdef USE_BASIC_PIXEL_MANAGER
+	return false;
+#else
+	int32_t width = FContext.pixelManager.Width, height = FContext.pixelManager.Height;
+
+	size_t X = FContext.pixelManager.Passes[FContext.pixelManager.PassCount - 1].X;
+	size_t Y = FContext.pixelManager.Passes[FContext.pixelManager.PassCount - 1].Y;
+	size_t TextureWidth = FContext.pixelManager.TextureWidth;
+
+	Pixels.resize(size_t(width) * size_t(height));
+	for (int32_t y = 0; y < height; y++) {
+		memcpy(&Pixels[size_t(y) * size_t(width)],
+			&FContext.pixelManager.Data[(Y + size_t(y)) * TextureWidth + X], size_t(width) * sizeof(float));
+	}
+
+	Width = width;
+	Height = height;
+	return true;
+#endif
+}

@@ -54,6 +54,8 @@ enum class MenuID : UINT_PTR {
 	RecomputeReference,
 	RecomputePixel,
 	RecomputeAll,
+
+	ExportZoomSequence,
 };
 
 

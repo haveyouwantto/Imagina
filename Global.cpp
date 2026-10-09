@@ -42,4 +42,8 @@ namespace Global {
 
 	bool SaveReference = true;
 	int ReferenceQuality = 40;
+
+	bool SuppressTextureUpdate = false;
+
+	bool DisablePixelReuse = false;
 }

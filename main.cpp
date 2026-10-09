@@ -6,9 +6,53 @@
 #include <fenv.h>
 #include <gmp-impl.h>
 
+#include "RawMapCodec.h"
+
 void OpenFile(wchar_t *FileName, size_t ExtensionOffset = 0);
 
+// Imagina.exe --decode <map.rawz> [<out.raw>]
+// Expands a compressed raw map into the plain layout "Save raw pixel data"
+// writes, so that other tools can read exported key frames.  It runs without a
+// window (and without OpenGL), which also makes it usable from scripts.
+static int DecodeRawMap(int argc, LPWSTR *argv) {
+	std::wstring Input = argv[2];
+	std::wstring Output;
+	if (argc >= 4) {
+		Output = argv[3];
+	} else {
+		size_t Extension = Input.find_last_of(L'.');
+		Output = (Extension == std::wstring::npos ? Input : Input.substr(0, Extension)) + L".raw";
+	}
+
+	std::vector<float> Values;
+	uint32_t Width = 0, Height = 0;
+	std::string Error;
+	if (!RawMapCodec::ReadFile(Input, Values, Width, Height, Error)) {
+		fprintf(stderr, "cannot expand %ls: %s\n", Input.c_str(), Error.c_str());
+		return 1;
+	}
+	if (!RawMapCodec::WriteRawFile(Output, Values, Width, Height, Error)) {
+		fprintf(stderr, "cannot write %ls: %s\n", Output.c_str(), Error.c_str());
+		return 2;
+	}
+	fprintf(stderr, "%ls: %u x %u float32 values written to %ls\n", Input.c_str(), Width, Height, Output.c_str());
+	return 0;
+}
+
 int WINAPI wWinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPWSTR /*lpCmdLine*/, int /*nCmdShow*/) {
+	int argc = 0;
+	LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+	if (argc >= 2 && _wcsicmp(argv[1], L"--decode") == 0) {
+		if (argc < 3) {
+			fprintf(stderr, "usage: Imagina.exe --decode <map.rawz> [<out.raw>]\n");
+			LocalFree(argv);
+			return 1;
+		}
+		int Result = DecodeRawMap(argc, argv);
+		LocalFree(argv);
+		return Result;
+	}
+
 	CreateMainWindow();
 	InitRenderResources();
 	Computation::Init();
@@ -23,8 +67,6 @@ int WINAPI wWinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPWSTR
 	Global::Initialized = true;
 	bool UseGetMessage = false;
 
-	int argc;
-	LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
 	if (argc == 2) {
 		OpenFile(argv[1]);
 	}

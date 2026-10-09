@@ -365,4 +365,6 @@ FodyWeavers.xsd
 [Bb]uild/
 [Ii]nclude/
 [Ll]ib/
+# Dependency sources used to build them (see Readme.md)
+/deps/
 CMakeSettings.json

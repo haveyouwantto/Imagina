@@ -128,6 +128,7 @@ public:
 
 private:
 	void Init();
+	void InitLayoutAndData();
 	void InvalidatePass(size_t Pass);
 	void AlignPass(size_t Pass, int32_t &DiffX, int32_t &DiffY);
 	void MovePass(size_t Pass, int32_t DiffX, int32_t DiffY);
@@ -144,6 +145,10 @@ public:
 	void ChangeMaxit(uint64_t OldMaxIt);
 	virtual void Clear() override;
 	virtual void SetResolution(int32_t Width, int32_t Height) override;
+	// Puts the passes back into the layout of a freshly initialised pixel
+	// manager, so that the next location is rendered without reusing anything
+	// from the location which was rendered before it.
+	void ResetPassLayout();
 	virtual void UpdateRelativeCoordinate(HRReal OffsetX, HRReal OffsetY) override;
 	void RemovePrevTextures();
 	virtual void SetLocation(RelLocation &Location) override;
