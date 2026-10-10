@@ -104,6 +104,7 @@ void CreateMainWindow() {
 	AppendMenuW(File, MF_STRING, (UINT_PTR)MenuID::SaveImage, L"Save image\tCtrl+Shift+S");
 	AppendMenuW(File, MF_STRING, (UINT_PTR)MenuID::SaveRawPixelData, L"Save raw pixel data");
 	AppendMenuW(File, MF_STRING, (UINT_PTR)MenuID::ExportZoomSequence, L"Export zoom sequence...");
+	AppendMenuW(File, MF_STRING, (UINT_PTR)MenuID::ResumeZoomSequence, L"Resume zoom sequence...");
 	AppendMenuW(File, MF_SEPARATOR, 0, nullptr);
 	AppendMenuW(File, MF_STRING, (UINT_PTR)MenuID::ReferenceSaving, L"Reference saving settings");
 
@@ -1303,6 +1304,10 @@ LRESULT CALLBACK WindowProcess(HWND hWnd, UINT Message, WPARAM wParam, LPARAM lP
 				}
 				case (UINT_PTR)MenuID::ExportZoomSequence: {
 					ShowZoomExportDialog();
+					break;
+				}
+				case (UINT_PTR)MenuID::ResumeZoomSequence: {
+					ResumeZoomExport();
 					break;
 				}
 				case (UINT_PTR)MenuID::AboutLicense: {

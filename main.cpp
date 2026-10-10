@@ -7,6 +7,7 @@
 #include <gmp-impl.h>
 
 #include "RawMapCodec.h"
+#include "ZoomExport.h"
 
 void OpenFile(wchar_t *FileName, size_t ExtensionOffset = 0);
 
@@ -51,6 +52,16 @@ int WINAPI wWinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPWSTR
 		int Result = DecodeRawMap(argc, argv);
 		LocalFree(argv);
 		return Result;
+	}
+	// Imagina.exe --period <record.imz> [<out.txt>]
+	// Writes the iterations every key frame of a record would be computed with,
+	// so that the per frame iteration limit can be inspected without exporting.
+	if (argc >= 3 && _wcsicmp(argv[1], L"--period") == 0) {
+		std::wstring Record = argv[2];
+		std::wstring Out = argc >= 4 ? argv[3] : Record + L".period.txt";
+		PrintFrameIterations(Record, Out);
+		LocalFree(argv);
+		return 0;
 	}
 
 	CreateMainWindow();

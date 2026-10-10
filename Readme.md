@@ -21,11 +21,18 @@ _The project is being rewritten. This repository may be renamed and replaced by 
 
 "File" -> "Export zoom sequence..." writes the key frames of a zoom sequence into the
 current centre, one losslessly compressed raw map (*.rawz) per key frame plus an
-export record (*.imz) listing the settings and the frames written so far; running it
-again with the same record continues an interrupted export.  Frames are expanded
-again with `Imagina.exe --decode <frame.rawz> [<frame.raw>]`, or with
-`tools/rawz.py`, which also reports statistics and writes coloured PNGs
+export record (*.imz) listing the settings and the frames written so far.  The
+coordinates the frames are computed at are kept in an *.im location file next to the
+record ("File" -> "Save"), which the record names, so that they are stored once;
+"File" -> "Resume zoom sequence..." continues an interrupted export from its record.
+Frames are expanded again with `Imagina.exe --decode <frame.rawz> [<frame.raw>]`, or
+with `tools/rawz.py`, which also reports statistics and writes coloured PNGs
 (`python tools/rawz.py --help`).
+
+The iteration limit of a key frame follows its scale: it is read from the orbit
+of the centre (the period of the view), so that the wide key frames do not spend
+the limit of the deepest one on the pixels which are inside the set.  The limits
+an export would use are listed by `Imagina.exe --period <record.imz>`.
 
 ## Build
 ### Dependencies

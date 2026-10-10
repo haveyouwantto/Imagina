@@ -54,6 +54,9 @@ constexpr const char *SequenceDirection = "outwards";
 struct ExportFrame {
 	size_t Index = 0;
 	HRReal HalfH;
+	// Iterations this frame is computed with (see FrameIterations), kept so that
+	// the progress display can show it.
+	size_t Iterations = 0;
 	bool Done = false;
 };
 
@@ -61,6 +64,16 @@ struct ExportSession {
 	bool Active = false;
 	std::wstring RecordPath;
 	std::wstring FileBase;
+	// The *.im file the record names, which holds the coordinates of the view
+	// the sequence starts at (see File.cpp).  Empty for a record which carries
+	// the coordinates itself, that is one of the older version.
+	std::wstring LocationPath;
+	// Where the centre of the key frames sits relative to the centre of that
+	// location, in units of the half height of the sequence.  A location file
+	// holds one point, the one its reference orbit belongs to (the
+	// CenterCoordinate of the application); the view the frames are computed at
+	// may have been panned away from it, and this is how far.
+	double ViewOffsetX = 0.0, ViewOffsetY = 0.0;
 	size_t Width = 0, Height = 0;
 	size_t Iterations = 0;
 	double Step = 2.0;
@@ -79,6 +92,17 @@ struct ExportSession {
 
 ExportSession Session;
 HWND ExportDialog = nullptr;
+
+// Whether the export dialog starts a new sequence from the displayed view or
+// continues the record which was chosen from the file menu.
+enum class ExportDialogMode {
+	New,
+	Resume,
+};
+ExportDialogMode DialogMode = ExportDialogMode::New;
+
+// The record "Resume zoom sequence" chose, shown and continued by the dialog.
+std::wstring ResumeRecordPath;
 
 // The view which was displayed before the export started.
 struct SavedViewState {
@@ -103,17 +127,6 @@ uint64_t PrecisionForHalfH(HRReal HalfH) {
 	return uint64_t(-std::min<int64_t>(0, HalfH.Exponent) + 64);
 }
 
-// Number of digits after the decimal point which make the recorded values
-// exactly representable: a half height has a 53 bit mantissa, a centre
-// coordinate as many bits as its precision. MPIR truncates when converting
-// back, so a rounded value could come back one step too small; an exact value
-// cannot.
-size_t DecimalDigitsFor(HRReal DeepestHalfH, size_t CenterBits) {
-	double HalfHDigits = 53.0 + double(std::max<int64_t>(0, -DeepestHalfH.Exponent)) + 8.0;
-	double CenterDigits = 24.0 + double(CenterBits) * 0.30103;
-	return size_t(std::clamp(std::max(HalfHDigits, CenterDigits), 24.0, 8192.0));
-}
-
 // The depth of a view, log2(2 / half height).  It is derived from the exponent
 // of the half height, which keeps it finite for any zoom level.
 double DepthOf(HRReal HalfH) {
@@ -126,18 +139,10 @@ std::string DepthToString(HRReal HalfH) {
 	return Buffer;
 }
 
-// Decimal representation with enough digits after the point, written with a
-// buffer that is large enough for any zoom depth the application can reach.
-std::string FormatDecimal(HRReal Value, size_t Digits, uint64_t Precision) {
-	std::vector<char> Buffer(Digits + 1024);
-	gmp_snprintf(Buffer.data(), Buffer.size(), "%.*Ff", int(Digits), Value.to_mpf_class(size_t(Precision)).get_mpf_t());
-	return std::string(Buffer.data());
-}
-
-std::string FormatDecimal(const HPReal &Value, size_t Digits) {
-	std::vector<char> Buffer(Digits + 1024);
-	gmp_snprintf(Buffer.data(), Buffer.size(), "%.*Ff", int(Digits), Value.get_mpf_t());
-	return std::string(Buffer.data());
+// The size of a view the way the location and zoom dialogs name it: a
+// magnification of 2 / half height, which is easier to read than the depth.
+std::string MagnificationToString(HRReal HalfH) {
+	return ZoomToString(ZoomType::Magnification, HalfH, 2.0_hr);
 }
 
 std::string FormatDouble(double Value) {
@@ -188,6 +193,26 @@ std::string ToAnsi(const std::wstring &Text) {
 	std::string Narrow(size_t(Length), '\0');
 	WideCharToMultiByte(CP_ACP, 0, Text.data(), int(Text.size()), Narrow.data(), Length, nullptr, nullptr);
 	return Narrow;
+}
+
+std::wstring FromAnsi(const std::string &Text) {
+	if (Text.empty()) return std::wstring();
+	int Length = MultiByteToWideChar(CP_ACP, 0, Text.data(), int(Text.size()), nullptr, 0);
+	std::wstring Wide(size_t(Length), L'\0');
+	MultiByteToWideChar(CP_ACP, 0, Text.data(), int(Text.size()), Wide.data(), Length);
+	return Wide;
+}
+
+// Defined with the dialog helpers below; the record needs the split to name the
+// location file, which holds the coordinates of the view the sequence starts at
+// (an *.im file next to the record, see File.cpp).
+void SplitRecordPath(const std::wstring &Path, std::wstring &Directory, std::wstring &FileBase);
+std::string FileNameOf(const std::wstring &Path);
+
+std::wstring LocationPathOf(const std::wstring &RecordPath) {
+	std::wstring Directory, FileBase;
+	SplitRecordPath(RecordPath, Directory, FileBase);
+	return FileBase + L".im";
 }
 
 const char *TargetTypeName(ZoomType Type) {
@@ -243,39 +268,67 @@ bool WriteRecordFile() {
 	std::ofstream File(Session.RecordPath.data(), std::ofstream::out | std::ofstream::trunc);
 	if (!File) return false;
 
-	HRReal Deepest = DeepestFrameHalfH(Session.Frames);
-	size_t Digits = DecimalDigitsFor(Deepest, Session.CenterX.get_prec());
-	uint64_t Precision = PrecisionForHalfH(Deepest);
-
 	File << "ImaginaZoomExport: 1\n";
 	File << "Width: " << Session.Width << "\n";
 	File << "Height: " << Session.Height << "\n";
-	File << "Iterations: " << Session.Iterations << "\n";
 	File << "Step: " << FormatDouble(Session.Step) << "\n";
 	File << "Encoding: " << FrameEncoding << "\n";
 	File << "Direction: " << SequenceDirection << "\n";
 	File << "TargetType: " << TargetTypeName(Session.TargetType) << "\n";
 	File << "TargetValue: " << Session.TargetText << "\n";
+	// The coordinates of the key frames, the iteration limit and the precision
+	// they need are the ones of the view the sequence starts at, so they are
+	// kept in the location file next to this record (the format of
+	// "File -> Save") instead of being repeated here.
+	std::wstring LocationFile = Session.LocationPath.empty()
+		? LocationPathOf(Session.RecordPath) : Session.LocationPath;
+	std::wstring LocationDirectory, LocationBase;
+	SplitRecordPath(Session.RecordPath, LocationDirectory, LocationBase);
+	// A name is enough while the file sits next to the record, which keeps the
+	// pair portable; a location somewhere else is written in full.
+	File << "Location: " << (LocationFile.rfind(LocationDirectory, 0) == 0
+		? FileNameOf(LocationFile) : ToAnsi(LocationFile)) << "\n";
+	// How far the centre of the key frames is from the centre of that location.
+	// A location file holds one point (the one its reference orbit belongs to),
+	// the view may have been panned away from it, and a continued export has to
+	// put the view back exactly (see ResumeExport).  Left out when the view was
+	// not moved away from it.
+	if (Session.ViewOffsetX != 0.0 || Session.ViewOffsetY != 0.0) {
+		File << "ViewOffset: " << FormatDouble(Session.ViewOffsetX) << " "
+			<< FormatDouble(Session.ViewOffsetY) << "\n";
+	}
 
-	std::string CenterRe = FormatDecimal(Session.CenterX, Digits);
-	File << "CenterRe: " << CenterRe << "\n";
-	File << "CenterIm: " << FormatDecimal(Session.CenterY, Digits) << "\n";
-	std::string CenterHalfH = FormatDecimal(Session.BaseHalfH, Digits, Precision);
-	File << "CenterHalfH: " << CenterHalfH << "\n";
-
-	File << "# frame i: half height = CenterHalfH * Step^i (frame 0 is the current view, the\n";
-	File << "# frames get wider), magnification = 2 / half height, depth = log2(2 / half height);\n";
+	File << "# the half height of frame i is the size in the location file times Step^i\n";
+	File << "# (frame 0 is the view the export started at, the frames get wider),\n";
+	File << "# magnification = 2 / half height, depth = log2(2 / half height);\n";
 	File << "# frames are written while their depth stays >= 0, that is while the view is not\n";
 	File << "# wider than the whole 2 x 2 fractal;\n";
 	File << "# the file of a key frame is <record name>-<four digit index>" << ToAnsi(RawMapCodec::FileExtension) << "\n";
 
 	size_t NumberOfFrames = Session.Frames.size();
 	File << "FrameCount: " << NumberOfFrames << "\n";
+	// The iteration limit every key frame is computed with, as pairs of "from
+	// this frame on, this limit" (the limits only fall, so a few entries describe
+	// the whole sequence).  They are written down so that a continued export does
+	// not have to work the periods out again, which is a walk over the orbit of
+	// the centre for every frame otherwise (see ComputeFrameIterations).
+	if (!Session.Frames.empty()) {
+		File << "Limits:";
+		size_t Previous = 0;
+		bool Any = false;
+		for (const ExportFrame &Frame : Session.Frames) {
+			if (!Any || Frame.Iterations != Previous) {
+				File << " " << Frame.Index << " " << Frame.Iterations;
+				Previous = Frame.Iterations;
+				Any = true;
+			}
+		}
+		File << "\n";
+	}
 	for (const ExportFrame &Frame : Session.Frames) {
 		if (!Frame.Done) continue;
 		// The size of a key frame is not written down: with the index it follows
-		// from the base half height and the step (half height of frame i =
-		// CenterHalfH * Step^i).
+		// from the size in the location file and the step.
 		File << "Frame: " << Frame.Index << "\n";
 	}
 	File.flush();
@@ -291,12 +344,12 @@ bool ReadRecordFile() {
 
 	try {
 		std::unordered_map<size_t, bool> ExportedFrames;
-		size_t Width = 0, Height = 0, Iterations = 0;
+		size_t Width = 0, Height = 0;
 		double Step = 0.0;
 		ZoomType TargetType = ZoomType::Magnification;
-		std::string TargetText, HalfHText;
-		HPReal CenterX, CenterY;
-		bool HaveCenter = false;
+		std::string TargetText, LocationText;
+		double ViewOffsetX = 0.0, ViewOffsetY = 0.0;
+		std::vector<std::pair<size_t, size_t>> Limits;
 		bool HaveDirection = false;
 		bool Valid = false;
 
@@ -315,23 +368,24 @@ bool ReadRecordFile() {
 				Width = size_t(strtoull(Value.c_str(), nullptr, 10));
 			} else if (Key == "Height") {
 				Height = size_t(strtoull(Value.c_str(), nullptr, 10));
-			} else if (Key == "Iterations") {
-				Iterations = size_t(strtoull(Value.c_str(), nullptr, 10));
 			} else if (Key == "Step") {
 				Step = strtod(Value.c_str(), nullptr);
 			} else if (Key == "TargetType") {
 				TargetTypeFromName(Value, TargetType);
 			} else if (Key == "TargetValue") {
 				TargetText = Value;
-			} else if (Key == "CenterRe") {
-				// Parse with enough precision for every digit in the file; the value
-				// is re-quantised to the precision of the deepest key frame below.
-				CenterX = HPReal(Value.c_str(), unsigned(64 + 4 * Value.size()));
-			} else if (Key == "CenterIm") {
-				CenterY = HPReal(Value.c_str(), unsigned(64 + 4 * Value.size()));
-				HaveCenter = true;
-			} else if (Key == "CenterHalfH") {
-				HalfHText = Value;
+			} else if (Key == "ViewOffset") {
+				// How far the centre of the key frames was panned away from the
+				// centre of the location file (see WriteRecordFile).
+				sscanf_s(Value.c_str(), "%lf %lf", &ViewOffsetX, &ViewOffsetY);
+			} else if (Key == "Limits") {
+				// The iteration limits of the whole sequence, as pairs of "from
+				// this frame on, this limit" (see WriteRecordFile).
+				std::stringstream Text(Value);
+				size_t Index = 0, Limit = 0;
+				while (Text >> Index >> Limit) Limits.emplace_back(Index, Limit);
+			} else if (Key == "Location") {
+				LocationText = Value;
 			} else if (Key == "Direction") {
 				// Only the outward sequence exists; a record from an older
 				// version (or a different direction) cannot be continued.
@@ -343,10 +397,33 @@ bool ReadRecordFile() {
 			}
 		}
 
-		if (!Valid || !Width || !Height || !Iterations || !(Step > 1.0) || !HaveCenter || !HaveDirection || HalfHText.empty()) return false;
+		if (!Valid || !Width || !Height || !(Step > 1.0) || !HaveDirection) return false;
 
-		HRReal HalfH(mpf_class(HalfHText.c_str(), unsigned(64 + 4 * HalfHText.size())));
+		// The location of the sequence lives in the *.im file the record names:
+		// it is opened here the way the file menu opens one, which restores the
+		// centre, the half height, the iteration limit, the precision and the
+		// reference orbit, exactly the state the export was started at.
+		if (LocationText.empty()) return false;
+		std::wstring Directory, FileBase;
+		SplitRecordPath(Session.RecordPath, Directory, FileBase);
+		std::wstring Location = FromAnsi(LocationText);
+		bool Absolute = Location.size() > 1
+			&& (Location[1] == L':' || Location[0] == L'\\' || Location[0] == L'/');
+		std::wstring LocationPath = Absolute ? Location : Directory + Location;
+		{
+			std::vector<wchar_t> Buffer(LocationPath.begin(), LocationPath.end());
+			Buffer.push_back(0);
+			OpenFile(Buffer.data(), 0);
+		}
+
+		HRReal HalfH = FContext.CurrentLocation.HalfH;
 		if (!(HalfH > 0.0_hr)) return false;
+		// The frames are centred where the location is, plus the offset the view
+		// was panned by when the export was started (the location file holds the
+		// point the reference belongs to).
+		HPReal CenterX = HPReal(FContext.CenterCoordinate.X) + HPReal(ViewOffsetX) * HPReal(HalfH);
+		HPReal CenterY = HPReal(FContext.CenterCoordinate.Y) + HPReal(ViewOffsetY) * HPReal(HalfH);
+		size_t Iterations = std::max<size_t>(2, std::min<size_t>(size_t(Global::ItLim), UINT64_C(1) << 32));
 
 		Session.Width = Width;
 		Session.Height = Height;
@@ -356,14 +433,30 @@ bool ReadRecordFile() {
 		Session.TargetText = TargetText;
 		Session.TargetValue = ParseZoom(TargetType, TargetText, 2.0_hr);
 		Session.BaseHalfH = HalfH;
+		Session.ViewOffsetX = ViewOffsetX;
+		Session.ViewOffsetY = ViewOffsetY;
 
 		// Rebuild the key frame list and mark the frames listed in the record as
 		// done, unless their raw file is gone.
 		if (!BuildFrames()) return false;
 
-		// The coordinate has to be kept with the precision of the deepest key frame,
-		// otherwise the export would continue at a slightly different location.
-		uint64_t Precision = PrecisionForHalfH(DeepestFrameHalfH(Session.Frames));
+		if (!Limits.empty()) {
+			size_t Limit = Session.Iterations;
+			size_t Position = 0;
+			for (ExportFrame &Frame : Session.Frames) {
+				while (Position < Limits.size() && Limits[Position].first <= Frame.Index) {
+					Limit = Limits[Position].second;
+					Position++;
+				}
+				Frame.Iterations = Limit;
+			}
+		}
+
+		// The coordinate has to be kept with the precision of the deepest key frame
+		// (and not lower than the application already uses), otherwise the export
+		// would continue at a slightly different location.
+		uint64_t Precision = std::max<uint64_t>(PrecisionForHalfH(DeepestFrameHalfH(Session.Frames)),
+			uint64_t(mpf_get_default_prec()));
 		Session.CenterX = HPReal(CenterX, Precision);
 		Session.CenterY = HPReal(CenterY, Precision);
 
@@ -403,6 +496,103 @@ enum class ExportPhase {
 	Prepare,
 };
 
+// ---------------------------------------------------------------------------
+// Iteration limit of a key frame
+//
+// The limit of the session is what the deepest key frame needs, but a key frame
+// which is only a few times wider than that shows a much coarser structure and
+// does not have to resolve it with the same number of iterations.  Leaving the
+// limit alone is what makes the wide key frames crawl: the pixels which are
+// inside the set run every iteration of the limit, and the linear approximation
+// cannot skip them there because the period of a wide view is short.
+//
+// The period of a view is read from the orbit of the reference point, so it
+// follows the scale the way the interactive zoom does (which gives a view 256
+// iterations per period of its cycle, see Evaluator::Feature::ItLimForZoomLevel
+// and MainWindow): it is the first iteration at which the orbit satisfies
+//
+//	2 * view radius * |dz/dc| > |z|,
+//
+// the test the reference generation uses to call a reference periodic, so a
+// wider view matches it earlier (see HInfLAEvaluator, CalculateOrbit).
+// ---------------------------------------------------------------------------
+
+// Iterations the interactive zoom allows for one period of a cycle.
+constexpr size_t IterationsPerPeriod = 256;
+
+// A key frame is never given fewer iterations than this.  The limit is also the
+// point where a pixel counts as inside the set, and a limit which is too tight
+// would grow black patches which the neighbouring key frames do not have.
+constexpr size_t MinFrameIterations = 1024;
+
+// Longest orbit the period of a view is looked for in.  The walk is over the
+// orbit of one point at the precision of the view, so it is bounded: a longer
+// period would give a limit above the session limit anyway.
+constexpr size_t MaxPeriodSearch = 1 << 16;
+
+// Works out the iteration limit of every key frame in one pass over the orbit of
+// the centre, and stores it in the frames.  Walking the orbit once per frame is
+// what made an export with a deep location appear to hang: the walk is O(limit)
+// high precision iterations, and a deep view has a long period (see
+// HInfLAEvaluator, CalculateOrbit).  The period of a view shrinks as the view
+// gets wider, so a single walk which records, for every iteration, the radius at
+// which that iteration counts as the period is enough for the whole sequence;
+// the result is written into the record (see WriteRecordFile) so that a
+// continued export does not have to work it out again.
+void ComputeFrameIterations() {
+	if (Session.Frames.empty()) return;
+
+	// A longer period than this would give a limit above the session limit
+	// anyway, so the orbit is not walked further than that.
+	size_t Search = std::clamp<size_t>(Session.Iterations / IterationsPerPeriod + 2, 64, MaxPeriodSearch);
+
+	// Critical radius of every iteration: the view of that radius (its height),
+	// or wider, is a periodic region from this iteration on.
+	std::vector<HRReal> Critical;
+	Critical.reserve(Search);
+
+	HPReal CR = Session.CenterX, CI = Session.CenterY;
+	HPReal ZR = CR, ZI = CI;
+	std::complex<HRReal> z{ convert<HRReal>(ZR), convert<HRReal>(ZI) };
+	std::complex<HRReal> dzdc = HRReal(1.0);
+	OMITemp<HPReal> Temp;
+
+	for (size_t i = 1; i <= Search; i++) {
+		HRReal ChebyZ = ChebyshevNorm(z);
+		HRReal ChebyDzdc = ChebyshevNorm(dzdc);
+		Critical.push_back(ChebyZ / (HRReal(2.0) * ChebyDzdc));
+
+		OMI(ZR, ZI, CR, CI, Temp);
+		dzdc = HRReal(2.0) * z * dzdc + HRReal(1.0);
+		z = std::complex<HRReal>{ convert<HRReal>(ZR), convert<HRReal>(ZI) };
+
+		// The orbit escaped: the views which are still waiting for their period
+		// are wider than anything the period describes, they keep the session
+		// limit.
+		if (std::norm(z) > HRReal(5.0)) break;
+	}
+
+	// A view is periodic from the first iteration whose critical radius is below
+	// its radius, so a running minimum turns the sequence into one which only
+	// falls.
+	for (size_t i = 1; i < Critical.size(); i++) {
+		if (Critical[i] > Critical[i - 1]) Critical[i] = Critical[i - 1];
+	}
+
+	// The key frames run from the deepest to the widest one, so their periods
+	// only get shorter: walk the frames from the last one backwards and let one
+	// cursor move through the critical radii.
+	size_t Cursor = 0;
+	for (size_t Index = Session.Frames.size(); Index-- > 0;) {
+		ExportFrame &Frame = Session.Frames[Index];
+		HRReal Radius = Frame.HalfH * 2.0_hr;
+		while (Cursor < Critical.size() && !(Critical[Cursor] < Radius)) Cursor++;
+		Frame.Iterations = Cursor < Critical.size()
+			? std::min(Session.Iterations, std::max(MinFrameIterations, (Cursor + 1) * IterationsPerPeriod))
+			: Session.Iterations;
+	}
+}
+
 ExportPhase GetExportPhase(SRReal &Fraction) {
 	if (FContext.ReferenceTaskContext) {
 		Fraction = 0.0;
@@ -423,7 +613,13 @@ ExportPhase GetExportPhase(SRReal &Fraction) {
 
 void StartFrame(size_t Cursor) {
 	Session.Cursor = Cursor;
-	const ExportFrame &Frame = Session.Frames[Cursor];
+	ExportFrame &Frame = Session.Frames[Cursor];
+
+	// The iteration limit of a key frame follows its scale, so that the wide
+	// frames do not spend the limit of the deepest one on the pixels which are
+	// inside the set.  The limits of the whole sequence are worked out in one
+	// pass, see ComputeFrameIterations.
+	Global::ItLim = Frame.Iterations;
 
 	// Move the view the way the interactive zoom does: the centre stays where it
 	// is and only the visible size changes, so the reference orbit which the
@@ -569,7 +765,8 @@ std::string CurrentFrameStatus(SRReal &Fraction) {
 
 	std::stringstream Stream;
 	Stream << "Frame " << (Session.DoneCount + 1) << "/" << Session.Frames.size()
-		<< ", depth " << DepthToString(Frame.HalfH) << "\n";
+		<< ", " << MagnificationToString(Frame.HalfH) << " zooms"
+		<< ", " << Frame.Iterations << " iterations\n";
 	switch (Phase) {
 		case ExportPhase::Reference: Stream << "reference orbit"; break;
 		case ExportPhase::Pixels: {
@@ -677,15 +874,21 @@ void UpdateIdleUI(HWND hWndDlg) {
 		HRReal First, Last;
 		if (PreviewSequence(hWndDlg, Count, First, Last)) {
 			Stream << Count << (Count == 1 ? " key frame: " : " key frames outwards: ")
-				<< "depth " << DepthToString(First) << " to " << DepthToString(Last) << "\n";
+				<< MagnificationToString(First) << " to " << MagnificationToString(Last) << " zooms\n";
 			// The record file which is entered right now decides the frame names.
 			std::wstring Directory, FileBase;
-			SplitRecordPath(GetDlgItemText(hWndDlg, IDC_EXPORT_FILE), Directory, FileBase);
+			std::wstring RecordPath = GetDlgItemText(hWndDlg, IDC_EXPORT_FILE);
+			SplitRecordPath(RecordPath, Directory, FileBase);
 			std::string OutputName = FileNameOf(FileBase);
 			if (OutputName.empty()) {
 				Stream << "Choose the output file.";
 			} else {
 				Stream << "Output: " << Shorten(OutputName) << "-0000" << ToAnsi(RawMapCodec::FileExtension);
+			}
+			if (!RecordPath.empty() && FileExists(RecordPath)) {
+				// The export only starts over: the record and its key frames are
+				// replaced ("Resume zoom sequence" continues one instead).
+				Stream << "\nThe record exists and is overwritten.";
 			}
 			if (Count < 2) {
 				Stream << "\nThe current view is already that wide.";
@@ -694,16 +897,16 @@ void UpdateIdleUI(HWND hWndDlg) {
 			Stream << "Fill in resolution, zoom step and stop.";
 		}
 	} else if (!Session.DoneCount) {
-		Stream << Session.Frames.size() << " key frames outwards: depth "
-			<< DepthToString(Session.Frames.front().HalfH) << " to "
-			<< DepthToString(Session.Frames.back().HalfH) << "\n";
+		Stream << Session.Frames.size() << " key frames outwards: "
+			<< MagnificationToString(Session.Frames.front().HalfH) << " to "
+			<< MagnificationToString(Session.Frames.back().HalfH) << " zooms\n";
 		Stream << "Output: " << Shorten(FileNameOf(Session.FileBase)) << "-0000" << ToAnsi(RawMapCodec::FileExtension) << " ...";
 	} else {
 		size_t Next = 0;
 		while (Next < Session.Frames.size() && Session.Frames[Next].Done) Next++;
 		Stream << Session.Frames.size() << " key frames, " << Session.DoneCount << " already exported\n";
-		Stream << "Continuing at frame " << Next << " (depth "
-			<< DepthToString(Session.Frames[std::min(Next, Session.Frames.size() - 1)].HalfH) << ")";
+		Stream << "Continuing at frame " << Next << " ("
+			<< MagnificationToString(Session.Frames[std::min(Next, Session.Frames.size() - 1)].HalfH) << " zooms)";
 	}
 
 	SetDlgItemTextA(hWndDlg, IDC_EXPORT_INFO, Stream.str().c_str());
@@ -807,14 +1010,17 @@ void SetControlsEnabled(HWND hWndDlg, bool Enabled) {
 	SetDlgItemTextW(hWndDlg, IDCANCEL, Enabled ? L"Close" : L"Cancel");
 }
 
-void StartExport(HWND hWndDlg) {
-	if (Session.Active) return;
-	if (!ParseSettings(hWndDlg)) return;
+// Sets up a new export from the settings in the dialog and the location which is
+// displayed right now, and writes the location file which holds the coordinates.
+// Returns false when the dialog asks something else first or the settings do not
+// produce a sequence.
+bool StartNewExport(HWND hWndDlg) {
+	if (!ParseSettings(hWndDlg)) return false;
 
 	std::wstring Path = GetDlgItemText(hWndDlg, IDC_EXPORT_FILE);
 	if (Path.empty()) {
 		MessageBoxW(hWndDlg, L"Choose the output file (*.imz) first.", L"Export zoom sequence", MB_OK | MB_ICONERROR);
-		return;
+		return false;
 	}
 	SetRecordPath(Path);
 
@@ -824,60 +1030,101 @@ void StartExport(HWND hWndDlg) {
 	Session.HaveTiming = false;
 	Session.LastFrameSeconds = 0.0;
 
-	// Settings of this run. They are used to tell a record which can be
-	// continued from one which was written with different settings.
-	size_t Width = Session.Width, Height = Session.Height, Iterations = Session.Iterations;
-	double Step = Session.Step;
-	ZoomType TargetType = Session.TargetType;
-	std::string TargetText = Session.TargetText;
-	HRReal TargetValue = Session.TargetValue;
-
-	bool Continued = false;
-	if (FileExists(Path) && ReadRecordFile()) {
-		if (Session.Width == Width && Session.Height == Height && Session.Iterations == Iterations
-			&& Session.Step == Step && Session.TargetValue == TargetValue) {
-			Continued = true;
-		} else {
-			std::wstring Message = L"The file\n\n" + Path
-				+ L"\n\nis an export record with different settings.\n"
-				  L"Export all key frames again and overwrite the files?";
-			if (MessageBoxW(hWndDlg, Message.c_str(), L"Export zoom sequence", MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
-				Session.Frames.clear();
-				Session.DoneCount = 0;
-				return;
-			}
+	// A record which is already there can only be started over from here; the
+	// "Resume zoom sequence" command of the file menu continues it instead.
+	if (FileExists(Path)) {
+		std::wstring Message = L"The file\n\n" + Path
+			+ L"\n\nalready exists.\nExport all key frames again and overwrite it?\n\n"
+			  L"To continue the export instead, use \"Resume zoom sequence\" in the file menu.";
+		if (MessageBoxW(hWndDlg, Message.c_str(), L"Export zoom sequence", MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
+			Session.Frames.clear();
+			Session.DoneCount = 0;
+			return false;
 		}
 	}
 
-	if (!Continued) {
-		Session.Width = Width;
-		Session.Height = Height;
-		Session.Iterations = Iterations;
-		Session.Step = Step;
-		Session.TargetType = TargetType;
-		Session.TargetText = TargetText;
-		Session.TargetValue = TargetValue;
-		Session.Frames.clear();
-		Session.DoneCount = 0;
-
-		// New export: take the location which is displayed right now.
-		Session.BaseHalfH = FContext.CurrentLocation.HalfH;
-		if (!BuildFrames()) {
-			MessageBoxA(hWndDlg, "The selected stop condition does not produce any key frame.", "Export zoom sequence", MB_OK | MB_ICONERROR);
-			return;
-		}
-		// The deepest key frame (the current view) needs the most precision, and
-		// the default precision must not be lowered below what the application
-		// already uses: the deltas of the deep pixels would disappear from the
-		// arithmetic and every pixel would be the reference point.
-		uint64_t Precision = std::max(PrecisionForHalfH(DeepestFrameHalfH(Session.Frames)),
-			uint64_t(mpf_get_default_prec()));
-		SetDefaultPrecision(size_t(Precision));
-		Session.CenterX = HPReal(FContext.CenterCoordinate.X, Precision);
-		Session.CenterX += HPReal(FContext.CurrentLocation.X);
-		Session.CenterY = HPReal(FContext.CenterCoordinate.Y, Precision);
-		Session.CenterY += HPReal(FContext.CurrentLocation.Y);
+	// The location is the one which is displayed right now.
+	Session.BaseHalfH = FContext.CurrentLocation.HalfH;
+	if (!BuildFrames()) {
+		MessageBoxA(hWndDlg, "The selected stop condition does not produce any key frame.", "Export zoom sequence", MB_OK | MB_ICONERROR);
+		return false;
 	}
+	// The deepest key frame (the current view) needs the most precision, and the
+	// default precision must not be lowered below what the application already
+	// uses: the deltas of the deep pixels would disappear from the arithmetic and
+	// every pixel would be the reference point.
+	uint64_t Precision = std::max(PrecisionForHalfH(DeepestFrameHalfH(Session.Frames)),
+		uint64_t(mpf_get_default_prec()));
+	SetDefaultPrecision(size_t(Precision));
+	Session.CenterX = HPReal(FContext.CenterCoordinate.X, Precision);
+	Session.CenterX += HPReal(FContext.CurrentLocation.X);
+	Session.CenterY = HPReal(FContext.CenterCoordinate.Y, Precision);
+	Session.CenterY += HPReal(FContext.CurrentLocation.Y);
+	// One pass over the orbit gives every key frame its iteration limit.
+	ComputeFrameIterations();
+
+	// The scene the export starts at -- the coordinates, the iteration limit, the
+	// reference orbit -- is written into the location file the record names, with
+	// the application's own save, so that a continued export can open it again
+	// (see ReadRecordFile) and get exactly this state back.
+	HPReal OffsetX = HPReal(Session.CenterX - FContext.CenterCoordinate.X) / HPReal(Session.BaseHalfH);
+	HPReal OffsetY = HPReal(Session.CenterY - FContext.CenterCoordinate.Y) / HPReal(Session.BaseHalfH);
+	Session.ViewOffsetX = mpf_get_d(OffsetX.get_mpf_t());
+	Session.ViewOffsetY = mpf_get_d(OffsetY.get_mpf_t());
+	{
+		std::wstring LocationPath = LocationPathOf(Session.RecordPath);
+		std::vector<wchar_t> Buffer(LocationPath.begin(), LocationPath.end());
+		Buffer.push_back(0);
+		SaveFile(Buffer.data(), FileType::Imagina);
+	}
+	return true;
+}
+
+// Sets up the export described by the record which is entered in the dialog,
+// including the location file it names.
+bool ResumeExport(HWND hWndDlg) {
+	std::wstring Path = GetDlgItemText(hWndDlg, IDC_EXPORT_FILE);
+	if (Path.empty() || !FileExists(Path)) {
+		MessageBoxW(hWndDlg, L"Choose the export record (*.imz) which is to be continued.",
+			L"Resume zoom sequence", MB_OK | MB_ICONERROR);
+		return false;
+	}
+	SetRecordPath(Path);
+	// Opening the location file below changes the displayed view, so the view the
+	// user is looking at is remembered first (EndExport puts it back).
+	if (!SavedView.Valid) CaptureView();
+	Session.Frames.clear();
+	Session.DoneCount = 0;
+	Session.HaveTiming = false;
+	Session.LastFrameSeconds = 0.0;
+	if (!ReadRecordFile()) {
+		std::wstring Message = L"The record\n\n" + Path
+			+ L"\n\nand the location file it names cannot be read.";
+		MessageBoxW(hWndDlg, Message.c_str(), L"Resume zoom sequence", MB_OK | MB_ICONERROR);
+		return false;
+	}
+	// A record which does not list the iteration limits of its key frames (one
+	// written before they were recorded) gets them worked out here, once for the
+	// whole sequence.
+	if (!Session.Frames.empty() && Session.Frames.back().Iterations == 0) {
+		SetDefaultPrecision(size_t(std::max<uint64_t>(PrecisionForHalfH(DeepestFrameHalfH(Session.Frames)),
+			uint64_t(mpf_get_default_prec()))));
+		ComputeFrameIterations();
+	}
+	// The dialog shows the settings of the record which is being continued.
+	SetDlgItemInt(hWndDlg, IDC_EXPORT_WIDTH, UINT(Session.Width), FALSE);
+	SetDlgItemInt(hWndDlg, IDC_EXPORT_HEIGHT, UINT(Session.Height), FALSE);
+	char Buffer[64];
+	sprintf_s(Buffer, "%.17g", Session.Step);
+	SetDlgItemTextA(hWndDlg, IDC_EXPORT_STEP, Buffer);
+	SendMessage(GetDlgItem(hWndDlg, IDC_EXPORT_TARGET_TYPE), CB_SETCURSEL, WPARAM(int(Session.TargetType)), 0);
+	SetDlgItemTextA(hWndDlg, IDC_EXPORT_TARGET_VALUE, Session.TargetText.c_str());
+	return true;
+}
+
+// Starts the export which has been set up (see StartNewExport and ResumeExport).
+void BeginExport(HWND hWndDlg) {
+	if (Session.Active) return;
 
 	size_t Pending = 0;
 	for (const ExportFrame &Frame : Session.Frames) if (!Frame.Done) Pending++;
@@ -919,6 +1166,16 @@ void StartExport(HWND hWndDlg) {
 	UpdateExportUI(hWndDlg);
 }
 
+void StartExport(HWND hWndDlg) {
+	if (Session.Active) return;
+	if (DialogMode == ExportDialogMode::Resume) {
+		if (!ResumeExport(hWndDlg)) return;
+	} else if (!StartNewExport(hWndDlg)) {
+		return;
+	}
+	BeginExport(hWndDlg);
+}
+
 void FinishDialog(HWND hWndDlg, bool Cancelled) {
 	bool WasActive = Session.Active;
 	EndExport();
@@ -958,18 +1215,12 @@ bool BrowseForRecord(HWND hWndDlg) {
 	if (!GetSaveFileNameW(&OpenFileName)) return false;
 
 	SetDlgItemTextW(hWndDlg, IDC_EXPORT_FILE, FileName);
-	if (!LoadRecordFromEdit(hWndDlg)) {
-		// No usable record: start a new export from the current location.
-		std::wstring Directory, FileBase;
-		Session.RecordPath = FileName;
-		SplitRecordPath(FileName, Directory, FileBase);
-		Session.FileBase = FileBase;
-		Session.Width = size_t(GetDlgItemInt(hWndDlg, IDC_EXPORT_WIDTH, nullptr, FALSE));
-		Session.Height = size_t(GetDlgItemInt(hWndDlg, IDC_EXPORT_HEIGHT, nullptr, FALSE));
-		Session.BaseHalfH = FContext.CurrentLocation.HalfH;
-		Session.Frames.clear();
-		Session.DoneCount = 0;
-	}
+	// The chosen file is only where the export is written: it always starts from
+	// the location which is displayed right now, and an existing record is
+	// overwritten.  "Resume zoom sequence" continues one instead.
+	SetRecordPath(FileName);
+	Session.Frames.clear();
+	Session.DoneCount = 0;
 	return true;
 }
 
@@ -1019,11 +1270,18 @@ INT_PTR ZoomExportProc(HWND hWndDlg, UINT Message, WPARAM wParam, LPARAM /*lPara
 			Session.TargetType = DefaultTargetType;
 			Session.BaseHalfH = FContext.CurrentLocation.HalfH;
 
-			if (!DefaultRecordPath.empty() && FileExists(DefaultRecordPath)) {
-				if (LoadRecordFromEdit(hWndDlg)) {
-					SetDlgItemTextA(hWndDlg, IDC_EXPORT_STATUS,
-						"Record loaded - press Start to continue.");
-				}
+			if (DialogMode == ExportDialogMode::Resume) {
+				// Opened from "Resume zoom sequence": the record is already
+				// chosen, so the export continues right away.  Reading it opens
+				// the location file it names, which puts the application into the
+				// state the export was started at; the view which is displayed
+				// now is remembered first, so that it comes back when the export
+				// ends.
+				SetDlgItemTextW(hWndDlg, IDC_EXPORT_FILE, ResumeRecordPath.c_str());
+				SetDlgItemTextW(hWndDlg, IDC_EXPORT_START, L"Continue");
+				if (!SavedView.Valid) CaptureView();
+				StartExport(hWndDlg);
+				return TRUE;
 			}
 			UpdateIdleUI(hWndDlg);
 			return TRUE;
@@ -1046,10 +1304,10 @@ INT_PTR ZoomExportProc(HWND hWndDlg, UINT Message, WPARAM wParam, LPARAM /*lPara
 				}
 				case IDC_EXPORT_FILE: {
 					if (HIWORD(wParam) == EN_KILLFOCUS) {
-						if (!LoadRecordFromEdit(hWndDlg)) {
-							Session.Frames.clear();
-							Session.DoneCount = 0;
-						}
+						// A file which is already there is only overwritten, it is not
+						// read back here ("Resume zoom sequence" continues a record).
+						Session.Frames.clear();
+						Session.DoneCount = 0;
 						UpdateIdleUI(hWndDlg);
 					}
 					return TRUE;
@@ -1096,5 +1354,58 @@ INT_PTR ZoomExportProc(HWND hWndDlg, UINT Message, WPARAM wParam, LPARAM /*lPara
 
 void ShowZoomExportDialog() {
 	if (Session.Active) return;
+	DialogMode = ExportDialogMode::New;
 	DialogBox(nullptr, MAKEINTRESOURCE(IDD_ZOOM_EXPORT), HWnd, ZoomExportProc);
+}
+
+// File -> "Resume zoom sequence...": asks for the record of the export which is
+// to be continued and then opens the export dialog, which carries on with the
+// pending key frames at once (StartNewExport is bypassed, see StartExport).
+void ResumeZoomExport() {
+	if (Session.Active) return;
+
+	wchar_t FileName[MAX_PATH] = L"";
+	if (!DefaultRecordPath.empty()) wcsncpy_s(FileName, DefaultRecordPath.c_str(), _TRUNCATE);
+
+	OPENFILENAMEW OpenFileName = {};
+	OpenFileName.lStructSize = sizeof(OPENFILENAMEW);
+	OpenFileName.hwndOwner = HWnd;
+	OpenFileName.lpstrFilter = L"Zoom sequence export record(*.imz)\0*.imz\0All Files(*.*)\0*.*\0";
+	OpenFileName.nFilterIndex = 1;
+	OpenFileName.lpstrFile = FileName;
+	OpenFileName.nMaxFile = sizeof(FileName) / sizeof(wchar_t);
+	OpenFileName.lpstrTitle = L"Continue which zoom sequence?";
+	OpenFileName.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+	OpenFileName.lpstrDefExt = L"imz";
+	if (!GetOpenFileNameW(&OpenFileName)) return;
+
+	ResumeRecordPath = FileName;
+	DialogMode = ExportDialogMode::Resume;
+	DialogBox(nullptr, MAKEINTRESOURCE(IDD_ZOOM_EXPORT), HWnd, ZoomExportProc);
+	DialogMode = ExportDialogMode::New;
+}
+
+// Writes the iteration limit of every key frame of an export record, so that the
+// limits an export would use can be inspected without running it (see
+// ComputeFrameIterations).  Driven by
+// "Imagina.exe --period <record.imz> [<out.txt>]".
+void PrintFrameIterations(const std::wstring &RecordPath, const std::wstring &OutPath) {
+	std::ofstream Out(OutPath, std::ofstream::out | std::ofstream::trunc);
+	Session.RecordPath = RecordPath;
+	SetRecordPath(RecordPath);
+	if (!ReadRecordFile()) {
+		Out << "not an export record\n";
+		return;
+	}
+	if (Session.Frames.empty()) return;
+	SetDefaultPrecision(size_t(std::max(PrecisionForHalfH(DeepestFrameHalfH(Session.Frames)),
+		uint64_t(mpf_get_default_prec()))));
+	// A record which does not list the limits (one of an older version) gets them
+	// worked out here, once.
+	if (Session.Frames.back().Iterations == 0) ComputeFrameIterations();
+	Out << "session limit " << Session.Iterations << ", precision " << mpf_get_default_prec() << "\n";
+	for (const ExportFrame &Frame : Session.Frames) {
+		Out << Frame.Index << " " << Frame.Iterations << " "
+			<< MagnificationToString(Frame.HalfH) << " zooms\n";
+	}
 }
